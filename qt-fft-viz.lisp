@@ -23,11 +23,25 @@
 
 
 (define-widget fft-drawer (QWidget)
-               ((mp3-file :initform nil)
+               ((the-mp3 :initform nil)
                 (current-location :initform 0)
                 (song-duration :initform 0)
                 (total-frames :initform 0))
   (:documentation "Draw "))
+
+
+(define-subwidget (fft-drawer timer) (q+:make-qtimer fft-drawer)
+  (setf (q+:single-shot timer) nil))
+
+(define-initializer (fft-drawer setup)
+  (q+:start timer (round 1000/60)))
+
+(define-slot (fft-drawer tick) ()
+  (declare (connected timer (timeout)))
+  (if the-mp3
+      (incf current-location))
+  ;; (format t "Drawing frame: ~a ~a~%" current-location fft-drawer)
+  (q+:repaint fft-drawer))
 
 (defun generate-frame (left-fft-data right-fft-data)
   "Create a data structure that represents one frame of the animation.
@@ -37,7 +51,8 @@
   
 (define-override (fft-drawer paint-event paint) (ev)
   "Handle paint events."
-  (declare (ignore ev))
+  ;; (format t "~a ~a ~a~%" current-location the-mp3 ev)
+  ;; (declare (ignore ev))
   ;; (format t "Got a paint event!~%")
   (with-finalizing 
       ;; Create a painter object to draw on
@@ -48,8 +63,8 @@
     (q+:fill-rect painter (q+:rect fft-drawer) (q+:qt.black))
     (q+:set-color pen (q+:make-qcolor 0 205 0))
     (q+:set-pen painter pen)
-    ;; (format t "File: ~a~%" mp3-file)
-    (when mp3-file
+    ;; (format t "File: ~a~%" the-mp3)
+    (when (and the-mp3 (< current-location total-frames))
       ;; (format t "Calculating fft~%")
       (let* ((height (q+:height fft-drawer))
              (width (q+:width fft-drawer))
@@ -63,9 +78,9 @@
              
              (win-center (ceiling (* 44100 (interpolate 0.0 song-duration
                                                         current-location total-frames))))
-             
-             (left-fft-data (bordeaux-fft:windowed-fft (mp3-file-left-channel mp3-file) win-center fft-window-size))
-             (right-fft-data (bordeaux-fft:windowed-fft (mp3-file-right-channel mp3-file) win-center fft-window-size))
+             (fft-window-size 1024)
+             (left-fft-data (bordeaux-fft:windowed-fft (mp3-file-left-channel the-mp3) win-center fft-window-size))
+             (right-fft-data (bordeaux-fft:windowed-fft (mp3-file-right-channel the-mp3) win-center fft-window-size))
              (frame (generate-frame left-fft-data right-fft-data)))
         
         ;; Local functions for mapping logical coordinates to physical coordinates
@@ -82,8 +97,8 @@
              for idx from 0
              do
                (q+:draw-line painter
-                             (xmapper (- (car vals))) (ymapper (* 1.25 idx))
-                             (xmapper (cdr vals)) (ymapper (* 1.25 idx)))))))))
+                             (truncate (xmapper (- (car vals)))) (truncate (ymapper (* 1.25 idx)))
+                             (truncate (xmapper (cdr vals))) (truncate (ymapper (* 1.25 idx))))))))))
 
 
 ;; Create all of the controls
@@ -91,38 +106,34 @@
 (define-subwidget (main-window viz-widget) (make-instance 'fft-drawer)
   "The fft-drawer itself.")
 
-(define-subwidget (main-window timer) (q+:make-qtimer main-window)
-  (setf (q+:single-shot timer) nil))
+(define-subwidget (main-window media-source) (q+:make-phonon-mediasource ""))
 
-(define-slot (main-window tick) ()
-  (declare (connected timer (timeout)))
-  (incf (slot-value viz-widget 'current-location))
-  (format t "Drawing frame: ~a~%" (slot-value viz-widget 'current-location))
-  (q+:repaint viz-widget)
-  ;; (q+:start timer (round 1000/30))
-  )
+(define-subwidget (main-window audio-output) (q+:make-phonon-audiooutput (q+:phonon.music-category) main-window))
+
+(define-subwidget (main-window media-object) (q+:make-phonon-mediaobject main-window)
+  (q+:set-tick-interval media-object 1000)
+  (q+:phonon-create-path media-object audio-output))
 
 (define-slot (main-window open open-file) ()
-  (q+:stop timer)
   (let* ((filename (q+:qfiledialog-get-open-file-name main-window "Select File"
-                                                      (q+:qdesktopservices-storage-location (q+:qdesktopservices.music-location))))
-         (mp3-file (read-mp3-file filename))
-         (sduration (mp3-file-duration-in-seconds mp3-file))
+                                                      (q+:qdesktopservices-storage-location (q+:qdesktopservices.music-location))
+                                                      "*.mp3"))
+         (new-mp3-file (read-mp3-file filename))
+         (sduration (mp3-file-duration-in-seconds new-mp3-file))
          (tframes (ceiling (* sduration 30))))
-    (setf (slot-value viz-widget 'mp3-file) (copy-mp3-file mp3-file))
     (setf (slot-value viz-widget 'current-location) 0)
+    (setf (slot-value viz-widget 'the-mp3) (copy-mp3-file new-mp3-file))
     (setf (slot-value viz-widget 'song-duration) sduration)
-    (setf (slot-value viz-widget 'total-frames) tframes))
-  (q+:start timer (round (/ 1000 30))))
+    (setf (slot-value viz-widget 'total-frames) tframes)
+    (setf (q+:current-source media-object) (q+:make-phonon-mediasource (uiop:native-namestring filename)))
+    (q+:play media-object)
+    ))
 
-(define-subwidget (main-window controls) (make-instance 'fft-drawer )
-  "The main-window's fft-controls widget."
-  )
 
 (define-initializer (main-window setup)
   "Set the window title and set the fft-controls to be the central widget."
   (setf (q+:window-title main-window) "Interactive FFT Explorer")
-  (setf (q+:central-widget main-window) controls))
+  (setf (q+:central-widget main-window) viz-widget))
 
 (defun main ()
   "Create the main window."

@@ -9,6 +9,7 @@
   :depends-on (#:qtools
                #:qtgui
                #:qtcore
+               #:phonon
                #:anim-utils)
   :serial t
   :components ((:file "package")
