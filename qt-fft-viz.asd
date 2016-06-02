@@ -9,8 +9,8 @@
   :depends-on (#:qtools
                #:qtgui
                #:qtcore
-               #:phonon
-               #:anim-utils)
+               #:anim-utils
+               #:mixalot-mp3)
   :serial t
   :components ((:file "package")
                (:file "qt-fft-viz")))
